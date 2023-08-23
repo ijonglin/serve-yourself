@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-injection-wrapper-deployment
+  labels:
+    app: flask-wrapper-injection-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flask-wrapper-injection-container
+  template:
+    metadata:
+      labels:
+        app: flask-wrapper-injection-container
+    spec:
+      containers:
+      - name: flask-wrapper-injection-container
+        # Change to the docker image that you wish to deploy
+        image: ijonglin/flask-wrapper-injection
+        ports:
+          - containerPort: 8888
+        env:
+          - name: "FLASK_PORT"
+            value: "8888"
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: flask-injection-service
+spec:
+  selector:
+    app: flask-wrapper-injection-container
+  ports:
+    - protocol: TCP
+      port: 8888
+      targetPort: 8888
+      # Needs to be exposed in expose-ports.kind.yaml
+      nodePort: 30000
+  type: NodePort
