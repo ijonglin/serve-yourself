@@ -7,16 +7,17 @@ import time
 import sys
 
 
-def k8s_getter(k8s_object_type, k8s_object_name, verbose=False):
+def k8s_getter(k8s_object_type: str, k8s_object_name: str, namespace: str = "default", verbose=False):
     # Example command to query: "kubectl get deployment.app flask-injection-wrapper-deployment -o json"
-    k8s_cmd = ['kubectl', 'get', k8s_object_type, k8s_object_name, '-o', 'json'],
+    k8s_cmd = ['kubectl', 'get', '-n', namespace, k8s_object_type, k8s_object_name, '-o', 'json']
     if verbose:
         print("k8s_command:")
         print(json.dumps(k8s_cmd, indent=4))
 
     try:
         k8s_get = subprocess.run(
-            ['kubectl', 'get', k8s_object_type, k8s_object_name, '-o', 'json'],
+            k8s_cmd,
+            # ['kubectl', 'get', k8s_object_type, k8s_object_name, '-o', 'json'],
             check=True, capture_output=True
         )
         k8s_get_stdout = k8s_get.stdout.decode('utf-8').strip()
@@ -28,9 +29,9 @@ def k8s_getter(k8s_object_type, k8s_object_name, verbose=False):
             raise e
 
 
-def wait_until(k8s_type: str, k8s_name: str, condition_test, timeout: int, verbose=False):
+def wait_until(k8s_type: str, k8s_name: str, condition_test, timeout: int, namespace: str, verbose=False):
     while timeout >= 0:
-        k8s_status_json = k8s_getter(k8s_type, k8s_name, verbose)
+        k8s_status_json = k8s_getter(k8s_type, k8s_name, namespace, verbose)
         try:
             if condition_test(k8s_status_json):
                 return True
@@ -46,11 +47,13 @@ def parse_args():
     arg_parse = argparse.ArgumentParser(usage="Generic k8s lifecycle event waiter")
     arg_parse.add_argument("--timeout", type=int, required=False, default=120, dest="timeout")
     arg_parse.add_argument("--type", type=str, required=True, dest="k8s_type",
-                           help="Name of the k8s element type to query (e.g. cool-pod-14)")
+                           help="Element type to query (e.g. pod)")
     arg_parse.add_argument("--name", type=str, required=True, dest="k8s_name",
-                           help="Name of the k8s element name to query (e.g. pod)")
+                           help="Name of the k8s element name to query (e.g. cool-pod-14)")
     arg_parse.add_argument("--abstract-state", type=str, required=True, dest="abstract_state",
                            help="Name of the abstract state (e.g. ready, gone)")
+    arg_parse.add_argument("--namespace", type=str, required=False, dest="namespace",
+                           default="default", help="K8s namespace of element, defaults to the default namespace.")
     arg_parse.add_argument("--verbose", required=False, dest="verbose", action="store_true",
                            help="Chatty output on stdout.")
     arg_parse.add_argument("--output", type=str, required=False, default="unix_return", dest="output")
@@ -60,8 +63,25 @@ def parse_args():
 def deployment_ready(json_status):
     return (json_status['status']['availableReplicas']) > 0
 
+
 def deployment_torndown(json_status):
     return 'NotFound' in json_status
+
+
+def pod_ready(json_status):
+    return (json_status['status']['phase']).lower() == "running"
+
+
+def pod_torndown(json_status):
+    return 'NotFound' in json_status
+
+
+def element_exists(json_status):
+    return not 'NotFound' in json_status
+
+
+def element_does_not_exist(json_status):
+    return not 'NotFound' in json_status
 
 
 def build_condition_table():
@@ -69,6 +89,16 @@ def build_condition_table():
     build_table['deployment.app'] = {
         'deployed': deployment_ready,
         'torndown': deployment_torndown
+    }
+    build_table['deployment.apps'] = build_table['deployment.app']
+
+    build_table['pod'] = {
+        'deployed': pod_ready,
+        'torndown': pod_torndown
+    }
+    build_table['ingress'] = {
+        'deployed': element_exists,
+        'torndown': element_does_not_exist
     }
     return build_table
 
@@ -79,18 +109,23 @@ def main():
     condition_table = build_condition_table()
 
     if parsed_args.k8s_type in condition_table and parsed_args.abstract_state in condition_table[parsed_args.k8s_type]:
-        print(f"Waiting for {parsed_args.abstract_state} state of k8s object {parsed_args.k8s_type} named {parsed_args.k8s_name}")
+        print(
+            f"Waiting for {parsed_args.abstract_state} state of k8s object {parsed_args.k8s_type} named {parsed_args.k8s_name}")
         if wait_until(parsed_args.k8s_type, parsed_args.k8s_name,
                       condition_table[parsed_args.k8s_type][parsed_args.abstract_state],
-                      parsed_args.timeout, parsed_args.verbose):
+                      parsed_args.timeout, parsed_args.namespace, parsed_args.verbose):
             print(
                 f"Found {parsed_args.abstract_state} state of k8s object {parsed_args.k8s_type} named {parsed_args.k8s_name}")
             return  # Exit normally
         else:
-            print(f"ERROR: Time out {parsed_args.abstract_state} of k8s object {parsed_args.k8s_type} named {parsed_args.k8s_name}")
+            print(
+                f"ERROR: Time out {parsed_args.abstract_state} of k8s object {parsed_args.k8s_type} named {parsed_args.k8s_name}")
             sys.exit(1)
     else:
-        print(f"ERROR: No condition test for {parsed_args.abstract_state} of k8s object {parsed_args.type}")
+        if parsed_args.k8s_type in condition_table:
+            print(f"ERROR: No condition test for {parsed_args.abstract_state} of k8s object {parsed_args.k8s_type}")
+        else:
+            print(f"ERROR: k8s object type {parsed_args.k8s_type} not supported.")
         sys.exit(1)
 
 
